@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hyperbeam Local Test</title>
+    <style>
+        body { background-color: #f5f5f5; color: #333; }
+        h1 { color: #000; margin: 20px; }
+        #hb-container { width: 80vw; height: 80vh; border: 1px solid black; background-color: #ddd; }
+        #status { margin-left: 12px; background-color: #e8f5e9; padding: 8px; }
+    </style>
+</head>
+<body>
+    <h1>My Shared Browser</h1>
+    <div id="hb-container"></div>
+    <div style="margin: 16px 0;">
+        <button id="refresh-sessions" name="refresh-sessions">Refresh Active Sessions</button>
+        <button id="close-sessions" name="close-sessions">Close All Sessions</button>
+        <button id="open-session" name="open-session" style="display:none; margin-left: 8px;">Open Session Directly</button>
+        <span id="status" name="status"></span>
+    </div>
+    <div id="session-link" style="margin-bottom: 16px;"></div>
+
+    <!-- Import the Hyperbeam Web SDK -->
+    <script type="module">
+        import Hyperbeam from "https://unpkg.com/@hyperbeam/web@latest/dist/index.js";
+
+        const statusEl = document.getElementById('status');
+        const sessionLinkEl = document.getElementById('session-link');
+        const openButton = document.getElementById('open-session');
+        let currentEmbedUrl = null;
+
+        function setStatus(message, isError = false) {
+            statusEl.textContent = message;
+            statusEl.style.color = isError ? 'red' : 'green';
+            console.log(message);
+        }
+
+        function showOpenButton(show) {
+            openButton.style.display = show ? 'inline-block' : 'none';
+        }
+
+        function setSessionLink(url) {
+            currentEmbedUrl = url;
+            if (!url) {
+                sessionLinkEl.innerHTML = '';
+                showOpenButton(false);
+                return;
+            }
+            sessionLinkEl.innerHTML = `
+                <p><strong>Direct session link:</strong> <a href="${url}" target="_blank" rel="noreferrer noopener">Open session directly</a></p>
+                <p style="margin-top: 0; font-size: 0.95em; color: #555;">If embedding times out, use the direct link above.</p>
+            `;
+            showOpenButton(true);
+        }
+
+        async function init() {
+    try {
+        setStatus('Requesting a new Hyperbeam session...');
+        const res = await fetch('/get-browser-session');
+        const data = await res.json();
+
+        console.log('Received data:', data);
+
+        if (!res.ok) {
+            throw new Error(data.message || 'Failed to create session');
+        }
+
+        if (!data.embed_url) {
+            throw new Error('Missing embed_url in response');
+        }
+
+        setSessionLink(data.embed_url);
+
+        // Try iframe fallback instead of WebRTC SDK
+        const container = document.getElementById('hb-container');
+        
+        try {
+            // First try the SDK
+            setStatus('Embedding Hyperbeam browser...');
+            const hb = await Promise.race([
+                Hyperbeam(container, data.embed_url),
+                new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error('WebRTC timeout')), 15000)
+                )
+            ]);
+            setStatus('Hyperbeam is ready!');
+        } catch (sdkErr) {
+            // Fallback to iframe if WebRTC fails
+            console.warn('WebRTC failed, falling back to iframe:', sdkErr.message);
+            setStatus('Using iframe fallback...');
+            container.innerHTML = `
+                <iframe 
+                    src="${data.embed_url}" 
+                    style="width:100%; height:100%; border:none;"
+                    allow="camera; microphone; clipboard-read; clipboard-write"
+                ></iframe>
+            `;
+            console.log(`Container dimensions: ${container.offsetWidth}x${container.offsetHeight}`);
+            setStatus('Hyperbeam loaded via iframe! ✅');
+        }
+
+    } catch (error) {
+        console.error('Error:', error);
+        setStatus(`Error: ${error.message}`, true);
+        if (currentEmbedUrl) {
+            setSessionLink(currentEmbedUrl);
+        }
+    }
+}
+
+        async function refreshActiveSessions() {
+            try {
+                setStatus('Refreshing active sessions...');
+                const res = await fetch('/get-active-sessions');
+                const data = await res.json();
+                console.log('Active sessions response:', data);
+
+                if (!res.ok) {
+                    throw new Error(data.message || 'Failed to refresh active sessions');
+                }
+
+                const count = Array.isArray(data.results) ? data.results.length : (Array.isArray(data) ? data.length : 0);
+                setStatus(`Active sessions: ${count}`);
+            } catch (error) {
+                console.error('Error refreshing active sessions:', error);
+                setStatus(`Error: ${error.message}`, true);
+            }
+        }
+
+        async function closeAllSessions() {
+            try {
+                setStatus('Closing all sessions...');
+                const res = await fetch('/close-all-sessions', { method: 'POST' });
+                const data = await res.json();
+                console.log('Close all sessions response:', data);
+
+                if (!res.ok) {
+                    throw new Error(data.message || 'Failed to close sessions');
+                }
+
+                const closed = Array.isArray(data.results) ? data.results.length : 0;
+                setStatus(`Closed ${closed} sessions`);
+            } catch (error) {
+                console.error('Error closing sessions:', error);
+                setStatus(`Error: ${error.message}`, true);
+            }
+        }
+
+        function openSessionDirectly() {
+            if (!currentEmbedUrl) {
+                setStatus('No active session URL available', true);
+                return;
+            }
+            window.open(currentEmbedUrl, '_blank', 'noopener');
+        }
+
+        document.getElementById('refresh-sessions').addEventListener('click', refreshActiveSessions);
+        document.getElementById('close-sessions').addEventListener('click', closeAllSessions);
+        openButton.addEventListener('click', openSessionDirectly);
+
+        init();
+    </script>
+</body>
+</html>
